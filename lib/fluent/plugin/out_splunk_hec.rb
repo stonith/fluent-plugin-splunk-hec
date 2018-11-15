@@ -6,6 +6,8 @@ require "fluent/plugin/formatter"
 require 'openssl'
 require 'multi_json'
 require 'net/http/persistent'
+require 'prometheus_exporter'
+require 'prometheus_exporter/client'
 
 module Fluent::Plugin
   class SplunkHecOutput < Fluent::Plugin::Output
@@ -97,6 +99,9 @@ module Fluent::Plugin
     config_section :fields, init: false, multi: false, required: false do
       # this is blank on purpose
     end
+
+    desc 'Enable prometheus exporter metrics'
+    config_param :prometheus_exporter, :bool, default: false
     
     config_section :format do
       config_set_default :usage, '**'
@@ -138,11 +143,18 @@ module Fluent::Plugin
       @formatters = @formatter_configs.map { |section|
 	MatchFormatter.new section.usage, formatter_create(usage: section.usage)
       }
+
+
     end
 
     def start
       super
 
+      if @prometheus_exporter
+        client = PrometheusExporter::Client.default
+        @hec_response = client.register(:counter, "hec_response", "response code from hec")
+      end
+      
       @hec_conn = new_connection
     end
 
@@ -330,7 +342,7 @@ module Fluent::Plugin
       log.trace { "POST #{@hec_api} body=#{post.body}" }
       response = @hec_conn.request @hec_api, post
       log.debug { "[Response] POST #{@hec_api}: #{response.inspect}" }
-
+      @hec_response.observe(1, status: response.code)
       # raise Exception to utilize Fluentd output plugin retry machanism
       raise "Server error (#{response.code}) for POST #{@hec_api}, response: #{response.body}" if response.code.start_with?('5')
 
